@@ -15,3 +15,4 @@ If you are developing a production application, we recommend using TypeScript an
 
 npm i react-router-dom
 npm i uuid
+npm install @codemirror/view @codemirror/state @codemirror/commands @codemirror/lang-javascript @codemirror/theme-one-dark @codemirror/autocomplete
