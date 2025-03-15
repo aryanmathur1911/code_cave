@@ -43,7 +43,7 @@ export default function Editor() {
         const code = viewRef.current.state.doc.toString();
     
         try {
-            //this function runs the code
+            //this function runs the code (it has no return value)
             const result = new Function(code)();
            
             //setting the output to the result of the code
