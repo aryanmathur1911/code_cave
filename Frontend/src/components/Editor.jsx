@@ -11,16 +11,16 @@ import { indentOnInput } from "@codemirror/language";
 import { history, defaultKeymap } from "@codemirror/commands";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { useEffect, useRef, useState } from "react";
+import ACTIONS from "../../Actions";
 
-export default function Editor() {
-  const [output, setOutput] = useState("");
+export default function Editor({ socketRef, caveId }) {
   const editorRef = useRef(null);
   const viewRef = useRef(null);
   const terminalRef = useRef(null);
-  const [terminalHeight, setTerminalHeight] = useState(150); // Default terminal height
+  const [output, setOutput] = useState("");
+  const [terminalHeight, setTerminalHeight] = useState(150);
 
   useEffect(() => {
-    // Create the editor's state(blueprint)
     const state = EditorState.create({
       doc: "//Write your code here",
       extensions: [
@@ -33,6 +33,14 @@ export default function Editor() {
         indentOnInput(),
         lineNumbers(),
         highlightActiveLine(),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            const text = update.state.doc.toString();
+            if (socketRef.current) {
+              socketRef.current.emit(ACTIONS.CODE_CHANGE, { caveId, text });
+            }
+          }
+        }),
       ],
     });
 
@@ -41,14 +49,34 @@ export default function Editor() {
       parent: editorRef.current,
     });
 
-    return () => viewRef.current.destroy();
-  },[]);
+    return () => {
+      socketRef.current?.off(ACTIONS.CODE_CHANGE);
+      viewRef.current.destroy();
+    };
+  }, []);
+
+  useEffect(() => {
+    socketRef.current?.on(ACTIONS.OUTPUT_CHANGE, ({ output }) => {
+      setOutput((prev) => prev + output + "\n");
+    });
+
+    socketRef.current?.on(ACTIONS.CODE_CHANGE, ({ text }) => {
+      if (text !== viewRef.current.state.doc.toString()) {
+        viewRef.current.dispatch({
+          changes: {
+            from: 0,
+            to: viewRef.current.state.doc.length,
+            insert: text,
+          },
+        });
+      }
+    });
+  }, [socketRef.current]);
 
   const runCode = () => {
     const code = viewRef.current.state.doc.toString();
-    setOutput(""); // Clear previous output
+    setOutput("");
 
-    // Create a sandboxed iframe
     const iframe = document.createElement("iframe");
     iframe.style.display = "none";
     document.body.appendChild(iframe);
@@ -57,16 +85,16 @@ export default function Editor() {
     const iframeDocument = iframe.contentDocument;
 
     const script = iframeDocument.createElement("script");
-
     script.innerHTML = `
       try {
-        console.log = (...args) => parent.postMessage({ type: "log", message: args.join(" ") }, "*");
-        console.error = (...args) => parent.postMessage({ type: "error", message: args.join(" ") }, "*");
-
-        window.prompt = (question) => {
-          parent.postMessage({ type: "prompt", question: question }, "*");
-          return "Waiting for input..."; 
+        console.log = (...args) => {
+          const formattedArgs = args.map(arg => 
+            typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)
+          ).join(" ");
+          parent.postMessage({ type: "log", message: formattedArgs }, "*");
         };
+
+        console.error = (...args) => parent.postMessage({ type: "error", message: args.join(" ") }, "*");
 
         ${code}
       } catch (error) {
@@ -79,11 +107,14 @@ export default function Editor() {
     const messageHandler = (event) => {
       if (event.data.type === "log") {
         setOutput((prev) => prev + event.data.message + "\n");
+        if (socketRef.current) {
+          socketRef.current.emit(ACTIONS.OUTPUT_CHANGE, {
+            caveId,
+            output: event.data.message,
+          });
+        }
       } else if (event.data.type === "error") {
         setOutput("Error executing code: " + event.data.message);
-      } else if (event.data.type === "prompt") {
-        const userInput = prompt(event.data.question) || "";
-        iframeWindow.postMessage({ type: "promptResponse", response: userInput }, "*");
       }
     };
 
@@ -95,7 +126,7 @@ export default function Editor() {
     }, 5000);
   };
 
-  // Handle terminal resize
+  // 🔥 Terminal Resizing Logic
   const startResizing = (e) => {
     e.preventDefault();
     document.addEventListener("mousemove", resizeTerminal);
@@ -115,16 +146,29 @@ export default function Editor() {
   };
 
   return (
-    <div className="flex flex-col h-screen">
-      <button
-        onClick={runCode}
-        className="bg-green-500 p-2 rounded m-2 hover:scale-105 hover:bg-green-600 w-1/5 hover:cursor-pointer"
-      >
-        Run Code
-      </button>
+    <div className="flex flex-col h-screen w-full">
+      {/* Run & Clear Buttons */}
+      <div className="flex justify-between p-2">
+        <button
+          onClick={runCode}
+          className="bg-green-500 text-white p-2 rounded hover:scale-105 hover:bg-green-600 w-1/2 sm:w-1/3 md:w-1/5"
+        >
+          Run Code
+        </button>
+
+        <button
+          onClick={() => setOutput("")}
+          className="bg-red-500 text-white p-2 rounded hover:scale-105 hover:bg-red-600 w-1/2 sm:w-1/3 md:w-1/5"
+        >
+          Clear Output
+        </button>
+      </div>
 
       {/* Editor Section */}
-      <div ref={editorRef} className="flex-1 border-2 border-white text-white p-2 overflow-auto"></div>
+      <div
+        ref={editorRef}
+        className="flex-1 border border-gray-300 text-white p-2 overflow-auto bg-gray-900"
+      ></div>
 
       {/* Resizable Handle */}
       <div
@@ -135,12 +179,12 @@ export default function Editor() {
       {/* Terminal Section */}
       <div
         ref={terminalRef}
-        className="bg-black text-green-400 p-2 overflow-auto"
+        className="bg-black text-green-400 p-2 overflow-auto text-sm sm:text-base"
         style={{ height: `${terminalHeight}px` }}
       >
         {output.split("\n").map((line, index) => (
-    <div key={index}>{line}</div>
-  ))}
+          <div key={index}>{line}</div>
+        ))}
       </div>
     </div>
   );
